@@ -17,6 +17,7 @@ interface ChatState {
   draftInput: string;
   abortCurrent: (() => void) | null;
   selectedTool: SelectedTool | null;
+  selectedCoreFunction: string | null;
   attachedUpload: UploadResult | null;
 
   createConversation: () => string;
@@ -30,6 +31,8 @@ interface ChatState {
   setAbortCurrent: (handler: (() => void) | null) => void;
   setSelectedTool: (tool: SelectedTool | null) => void;
   clearSelectedTool: () => void;
+  setSelectedCoreFunction: (fnName: string | null) => void;
+  clearSelectedCoreFunction: () => void;
   setAttachedUpload: (upload: UploadResult | null) => void;
   clearAttachedUpload: () => void;
   getActiveConversation: () => Conversation | undefined;
@@ -44,6 +47,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   draftInput: '',
   abortCurrent: null,
   selectedTool: null,
+  selectedCoreFunction: null,
   attachedUpload: null,
 
   createConversation: () => {
@@ -114,6 +118,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setAbortCurrent: (handler) => set({ abortCurrent: handler }),
   setSelectedTool: (tool) => set({ selectedTool: tool }),
   clearSelectedTool: () => set({ selectedTool: null }),
+  setSelectedCoreFunction: (fnName) => set({ selectedCoreFunction: fnName }),
+  clearSelectedCoreFunction: () => set({ selectedCoreFunction: null }),
   setAttachedUpload: (upload) => set({ attachedUpload: upload }),
   clearAttachedUpload: () => set({ attachedUpload: null }),
 

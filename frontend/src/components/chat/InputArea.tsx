@@ -16,10 +16,10 @@ export default function InputArea() {
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const {
-    activeId, isStreaming, draftInput, abortCurrent, selectedTool, attachedUpload, appendBotChunk,
-    setStreaming, createConversation, saveToStorage, setDraftInput, setAbortCurrent, setSelectedTool, clearSelectedTool, setAttachedUpload, clearAttachedUpload,
+    activeId, isStreaming, draftInput, abortCurrent, selectedTool, selectedCoreFunction, attachedUpload, appendBotChunk,
+    setStreaming, createConversation, saveToStorage, setDraftInput, setAbortCurrent, setSelectedTool, clearSelectedTool, setSelectedCoreFunction, clearSelectedCoreFunction, setAttachedUpload, clearAttachedUpload,
   } = useChatStore();
-  const { llmModel, topP, temperature, maxLength, systemPrompt } = useSettingsStore();
+  const { llmModel, topP, temperature, maxLength, systemPrompt, coreFunctions } = useSettingsStore();
   const conv = useChatStore((state) => state.getActiveConversation());
   const sendLockRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -44,9 +44,18 @@ export default function InputArea() {
     return <FileOutlined style={{ color: '#fff', fontSize: 24 }} />;
   })();
 
-  const handleSend = async () => {
-    const msg = draftInput.trim();
-    if ((!msg && !selectedTool && !attachedUpload) || isStreaming || sendLockRef.current) return;
+  const handleSend = async (additionalFn?: string) => {
+    const rawDraft = draftInput;
+    const msg = rawDraft.trim();
+    const effectiveAdditionalFn = additionalFn || selectedCoreFunction || undefined;
+    const hasSendablePayload = Boolean(
+      msg ||
+      selectedTool ||
+      attachedUpload ||
+      (effectiveAdditionalFn && (msg || attachedUpload))
+    );
+    const requestLabel = msg || selectedTool?.name || effectiveAdditionalFn || null;
+    if (!hasSendablePayload || isStreaming || sendLockRef.current) return;
     sendLockRef.current = true;
 
     let convId = activeId;
@@ -61,7 +70,7 @@ export default function InputArea() {
     if (prevChatbot.length === 0) {
       useChatStore.setState((s) => ({
         conversations: s.conversations.map((c) =>
-          c.id === convId ? { ...c, title: (msg || selectedTool?.name || '新对话').slice(0, 30) } : c
+          c.id === convId ? { ...c, title: (msg || selectedTool?.name || effectiveAdditionalFn || '新对话').slice(0, 30) } : c
         ),
       }));
     }
@@ -79,6 +88,7 @@ export default function InputArea() {
         max_length: maxLength,
         plugin_name: selectedTool?.name,
         plugin_kwargs: selectedTool?.args,
+        additional_fn: effectiveAdditionalFn,
         session_id: convId,
         attached_upload_path: attachedUpload?.input_path || null,
       });
@@ -87,7 +97,7 @@ export default function InputArea() {
       const res = await response;
       if (!res.ok) {
         appendBotChunk(
-          [...prevChatbot, [msg || selectedTool?.name || null, `错误: ${res.status} ${res.statusText}`]],
+          [...prevChatbot, [requestLabel, `错误: ${res.status} ${res.statusText}`]],
           history
         );
         setStreaming(false);
@@ -97,6 +107,7 @@ export default function InputArea() {
       // 用 requestAnimationFrame 节流 SSE 更新，避免每个 chunk 都触发重渲染
       let pendingEvent: { chatbot: [string | null, string | null][]; history: string[] } | null = null;
       let rafId: number | null = null;
+      let lastRenderedHistory = history;
 
       // 后端每次请求创建新 chatbot，只含当前轮消息，需要拼接历史
       const mergeWithPrev = (serverChatbot: [string | null, string | null][], serverHistory: string[]) => {
@@ -110,12 +121,36 @@ export default function InputArea() {
         if (pendingEvent) {
           const merged = mergeWithPrev(pendingEvent.chatbot, pendingEvent.history);
           appendBotChunk(merged.chatbot, merged.history);
+          lastRenderedHistory = merged.history;
           pendingEvent = null;
         }
         rafId = null;
       };
 
       for await (const event of parseSSEStream(res)) {
+        if (event.msg?.startsWith('Error:') && event.chatbot.length === 0) {
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            flushUpdate();
+          }
+          const currentConv = useChatStore.getState().getActiveConversation();
+          const currentChatbot = [...(currentConv?.chatbot || prevChatbot)];
+          const lastIndex = currentChatbot.length - 1;
+          const errorText = `错误: ${event.msg.replace(/^Error:\s*/, '')}`;
+
+          if (lastIndex >= 0 && currentChatbot[lastIndex]?.[0] === requestLabel) {
+            currentChatbot[lastIndex] = [
+              currentChatbot[lastIndex][0],
+              [currentChatbot[lastIndex][1], errorText].filter(Boolean).join('\n\n'),
+            ];
+          } else {
+            currentChatbot.push([requestLabel, errorText]);
+          }
+
+          appendBotChunk(currentChatbot, currentConv?.history || lastRenderedHistory);
+          continue;
+        }
+
         pendingEvent = event;
         if (rafId === null) {
           rafId = requestAnimationFrame(flushUpdate);
@@ -132,8 +167,9 @@ export default function InputArea() {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
         const currentConv = useChatStore.getState().getActiveConversation();
         const errorMessage = err instanceof Error ? err.message : '未知错误';
+        setDraftInput(rawDraft);
         appendBotChunk(
-          [...(currentConv?.chatbot || []).slice(0, -1), [msg || selectedTool?.name || null, `错误: ${errorMessage}`]],
+          [...(currentConv?.chatbot || []).slice(0, -1), [requestLabel, `错误: ${errorMessage}`]],
           history
         );
       }
@@ -220,6 +256,10 @@ export default function InputArea() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
+    if (nativeEvent.isComposing || nativeEvent.keyCode === 229) {
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -396,6 +436,35 @@ export default function InputArea() {
           </div>
         )}
 
+        {selectedCoreFunction && (
+          <div style={{ padding: '0 18px 8px' }}>
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '8px 14px',
+                borderRadius: 999,
+                border: `1px solid ${token.colorPrimaryBorder}`,
+                background: token.colorPrimaryBg,
+                color: token.colorPrimary,
+                fontSize: 14,
+                fontWeight: 500,
+              }}
+            >
+              <ThunderboltOutlined />
+              <span>{selectedCoreFunction}</span>
+              <Button
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                onClick={clearSelectedCoreFunction}
+                style={{ width: 20, height: 20, minWidth: 20, color: token.colorPrimary }}
+              />
+            </div>
+          </div>
+        )}
+
         <div
           style={{
             display: 'flex',
@@ -475,9 +544,16 @@ export default function InputArea() {
               content={
                 <ToolPicker
                   mainInput={draftInput}
+                  coreFunctions={coreFunctions}
                   onSelectTool={(tool) => {
+                    clearSelectedCoreFunction();
                     setSelectedTool(tool);
                     setToolPickerOpen(false);
+                  }}
+                  onExecuteCoreFunction={(fnName) => {
+                    clearSelectedTool();
+                    setToolPickerOpen(false);
+                    setSelectedCoreFunction(fnName);
                   }}
                 />
               }
@@ -529,13 +605,13 @@ export default function InputArea() {
                 type="primary"
                 shape="circle"
                 size="small"
-                onClick={handleSend}
-                disabled={!draftInput.trim() && !selectedTool && !attachedUpload}
+                onClick={() => handleSend()}
+                disabled={!draftInput.trim() && !selectedTool && !attachedUpload && !(selectedCoreFunction && (draftInput.trim() || attachedUpload))}
                 style={{
                   width: 42,
                   height: 42,
-                  background: draftInput.trim() || selectedTool || attachedUpload ? '#b7b9bf' : undefined,
-                  borderColor: draftInput.trim() || selectedTool || attachedUpload ? '#b7b9bf' : undefined,
+                  background: draftInput.trim() || selectedTool || attachedUpload || (selectedCoreFunction && (draftInput.trim() || attachedUpload)) ? '#b7b9bf' : undefined,
+                  borderColor: draftInput.trim() || selectedTool || attachedUpload || (selectedCoreFunction && (draftInput.trim() || attachedUpload)) ? '#b7b9bf' : undefined,
                 }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

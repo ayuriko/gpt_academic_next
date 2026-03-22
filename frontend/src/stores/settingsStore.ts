@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { CoreFunction } from '@/lib/types';
 
 interface SettingsState {
   llmModel: string;
@@ -8,6 +9,7 @@ interface SettingsState {
   systemPrompt: string;
   darkMode: boolean;
   availModels: string[];
+  coreFunctions: Record<string, CoreFunction>;
 
   setModel: (m: string) => void;
   setTopP: (v: number) => void;
@@ -16,6 +18,7 @@ interface SettingsState {
   setSystemPrompt: (s: string) => void;
   toggleDarkMode: () => void;
   setAvailModels: (models: string[]) => void;
+  setCoreFunctions: (functions: Record<string, CoreFunction>) => void;
   loadFromStorage: () => void;
   persist: () => void;
 }
@@ -28,6 +31,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   systemPrompt: 'Serve me as a writing and programming assistant.',
   darkMode: true,
   availModels: [],
+  coreFunctions: {},
 
   setModel: (m) => { set({ llmModel: m }); get().persist(); },
   setTopP: (v) => { set({ topP: v }); get().persist(); },
@@ -39,6 +43,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     get().persist();
   },
   setAvailModels: (models) => set({ availModels: models }),
+  setCoreFunctions: (functions) => set({ coreFunctions: functions }),
 
   loadFromStorage: () => {
     if (typeof window === 'undefined') return;

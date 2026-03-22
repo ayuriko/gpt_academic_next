@@ -1,28 +1,34 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Empty, Input, Space, Typography, theme } from 'antd';
+import { Divider, Empty, Input, Space, Typography, theme } from 'antd';
 import { SearchOutlined, AppstoreOutlined } from '@ant-design/icons';
 import { fetchPlugins } from '@/lib/api';
-import { PluginInfo } from '@/lib/types';
+import { CoreFunction, PluginInfo } from '@/lib/types';
 import { usePluginStore } from '@/stores/pluginStore';
 import PluginGroupFilter from './PluginGroupFilter';
 import PluginButton from './PluginButton';
 import PluginArgModal from './PluginArgModal';
+import CoreFunctionBar from './CoreFunctionBar';
 
 const { Text } = Typography;
 
 export default function ToolPicker({
   mainInput,
+  coreFunctions,
   onSelectTool,
+  onExecuteCoreFunction,
 }: {
   mainInput: string;
+  coreFunctions: Record<string, CoreFunction>;
   onSelectTool: (tool: { name: string; args?: Record<string, string> }) => void;
+  onExecuteCoreFunction: (fnName: string) => void;
 }) {
   const { plugins, activeGroups, setPlugins } = usePluginStore();
   const [search, setSearch] = useState('');
   const [modalPlugin, setModalPlugin] = useState<{ name: string; info: PluginInfo } | null>(null);
   const { token } = theme.useToken();
+  const hasCoreFunctions = Object.keys(coreFunctions).length > 0;
 
   useEffect(() => {
     if (Object.keys(plugins).length === 0) {
@@ -71,6 +77,21 @@ export default function ToolPicker({
           allowClear
           style={{ marginBottom: 12, borderRadius: 999 }}
         />
+
+        {hasCoreFunctions && (
+          <div style={{ marginBottom: 12 }}>
+            <Space align="center" style={{ marginBottom: 8 }}>
+              <Text strong style={{ fontSize: 13, color: token.colorText }}>
+                基础功能
+              </Text>
+            </Space>
+            <CoreFunctionBar
+              functions={coreFunctions}
+              onExecute={onExecuteCoreFunction}
+            />
+            <Divider style={{ margin: '12px 0 10px' }} />
+          </div>
+        )}
 
         <PluginGroupFilter />
 

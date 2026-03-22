@@ -113,10 +113,53 @@ export default React.memo(function MessageBubble({
               {content}
             </Paragraph>
           ) : (
-            isStreamingMsg ? (
-              // 流式输出时用纯文本渲染，避免每次 chunk 重新解析 markdown
+            isStreamingMsg && !isMultiModelCompare ? (
+              // 单模型流式输出：纯文本渲染，避免每次 chunk 重新解析 markdown
               <div style={{ fontSize: 15, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {content}
+              </div>
+            ) :
+            isStreamingMsg && isMultiModelCompare ? (
+              // 多模型流式输出：分栏布局 + 纯文本（不走 ReactMarkdown）
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                {multiModelSections.map((section) => (
+                  <div
+                    key={section.model}
+                    style={{
+                      minWidth: 0,
+                      padding: '14px 16px',
+                      borderRadius: 18,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      background: token.colorBgElevated,
+                      boxShadow: '0 8px 20px rgba(15, 23, 42, 0.05)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        padding: '4px 10px',
+                        borderRadius: 999,
+                        background: token.colorFillSecondary,
+                        color: token.colorText,
+                        fontSize: 13,
+                        fontWeight: 600,
+                        marginBottom: 12,
+                      }}
+                    >
+                      {section.model}
+                    </div>
+                    <div style={{ fontSize: 15, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {section.content || '正在响应中...'}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) :
             isMultiModelCompare ? (

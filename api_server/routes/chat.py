@@ -1,4 +1,6 @@
+import importlib
 import os
+import re
 import uuid
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
@@ -26,19 +28,49 @@ class ChatRequest(BaseModel):
     attached_upload_path: str | None = None
 
 
-def _resolve_plugin_executor(plugin_name: str):
+def _has_meaningful_plugin_kwargs(plugin_kwargs: dict | None) -> bool:
+    if not plugin_kwargs:
+        return False
+    for value in plugin_kwargs.values():
+        if isinstance(value, str):
+            if value.strip():
+                return True
+        elif value is not None:
+            return True
+    return False
+
+
+def _resolve_plugin_executor(plugin_name: str, plugin_kwargs: dict | None = None):
     plugins = get_crazy_functions()
     plugin = plugins.get(plugin_name)
     if plugin is None:
         raise HTTPException(status_code=404, detail=f"Plugin not found: {plugin_name}")
 
-    if plugin.get("Class") is not None:
+    # 对新旧双入口并存的插件，只有当前端确实提交了插件参数时才优先走 Class.execute。
+    # 这样像“Arxiv论文翻译”这类按钮式插件仍可沿用旧的函数式主输入体验。
+    if plugin.get("Class") is not None and _has_meaningful_plugin_kwargs(plugin_kwargs):
         return plugin["Class"].execute
 
     if plugin.get("Function") is not None:
         return plugin["Function"]
 
+    if plugin.get("Class") is not None:
+        return plugin["Class"].execute
+
     raise HTTPException(status_code=400, detail=f"Plugin has no executable entry: {plugin_name}")
+
+
+def _resolve_locked_executor(callback_path: str):
+    normalized = (callback_path or "").strip()
+    if not normalized or "->" not in normalized:
+        raise HTTPException(status_code=400, detail=f"Invalid locked plugin callback: {callback_path}")
+
+    module_name, fn_name = normalized.split("->", 1)
+    module = importlib.import_module(module_name)
+    executor = getattr(module, fn_name, None)
+    if executor is None:
+        raise HTTPException(status_code=404, detail=f"Locked plugin callback not found: {callback_path}")
+    return executor
 
 
 def _normalize_upload_path(path: str | None) -> str:
@@ -46,6 +78,43 @@ def _normalize_upload_path(path: str | None) -> str:
     if not normalized:
         return ""
     return normalized if os.path.isabs(normalized) else os.path.abspath(normalized)
+
+
+def _looks_like_explicit_resource(value: str) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    if text.startswith(("http://", "https://", "file://", "/")):
+        return True
+    if text.startswith("./") or text.startswith("../") or text.startswith("~/"):
+        return True
+    if "\\" in text or "/" in text:
+        return True
+    return re.match(r"^[A-Za-z]:[\\/]", text) is not None
+
+
+def _should_use_uploaded_path(plugin_name: str | None, main_input: str, attached_upload_path: str) -> bool:
+    if not plugin_name or not attached_upload_path:
+        return False
+
+    plugin = get_crazy_functions().get(plugin_name) or {}
+    info = str(plugin.get("Info") or "")
+    path_markers = (
+        "输入参数为路径",
+        "输入参数是路径",
+        "输入参数为文件路径",
+        "输入参数为论文路径",
+        "路径或上传压缩包",
+        "路径或URL",
+        "路径或DOI",
+        "路径或doi",
+        "上传压缩包",
+    )
+    expects_path_like_input = any(marker in info for marker in path_markers)
+    if not expects_path_like_input:
+        return False
+
+    return not _looks_like_explicit_resource(main_input)
 
 
 @router.post("/chat/stream")
@@ -95,9 +164,23 @@ async def chat_stream(req: ChatRequest):
     main_input = req.message.strip()
     if req.plugin_name and not main_input:
         main_input = attached_upload_path or most_recent_uploaded.get("path", "")
+    elif _should_use_uploaded_path(req.plugin_name, main_input, attached_upload_path):
+        main_input = attached_upload_path
 
+    locked_plugin = (session_cookie.get("lock_plugin") or "").strip()
     if req.plugin_name:
-        executor = _resolve_plugin_executor(req.plugin_name)
+        executor = _resolve_plugin_executor(req.plugin_name, plugin_kwargs)
+        gen = executor(
+            main_input,
+            llm_kwargs,
+            plugin_kwargs,
+            chatbot,
+            history,
+            req.system_prompt,
+            None,
+        )
+    elif locked_plugin:
+        executor = _resolve_locked_executor(locked_plugin)
         gen = executor(
             main_input,
             llm_kwargs,

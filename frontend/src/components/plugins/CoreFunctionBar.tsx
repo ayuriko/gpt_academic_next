@@ -19,7 +19,13 @@ export default function CoreFunctionBar({
           size="small"
           type={fn.Color === 'primary' ? 'primary' : 'default'}
           onClick={() => onExecute(name)}
-          style={{ borderRadius: 6, fontSize: 12 }}
+          style={{
+            borderRadius: 999,
+            height: 28,
+            paddingInline: 12,
+            fontSize: 12,
+            fontWeight: 500,
+          }}
         >
           {name}
         </Button>
