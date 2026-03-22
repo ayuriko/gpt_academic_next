@@ -1,14 +1,23 @@
 import { create } from 'zustand';
-import { Conversation } from '@/lib/types';
+import { Conversation, UploadResult } from '@/lib/types';
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+interface SelectedTool {
+  name: string;
+  args?: Record<string, string>;
 }
 
 interface ChatState {
   conversations: Conversation[];
   activeId: string | null;
   isStreaming: boolean;
+  draftInput: string;
+  abortCurrent: (() => void) | null;
+  selectedTool: SelectedTool | null;
+  attachedUpload: UploadResult | null;
 
   createConversation: () => string;
   setActive: (id: string | null) => void;
@@ -17,6 +26,12 @@ interface ChatState {
   addUserMessage: (content: string) => void;
   appendBotChunk: (chatbot: [string | null, string | null][], history: string[]) => void;
   setStreaming: (v: boolean) => void;
+  setDraftInput: (value: string) => void;
+  setAbortCurrent: (handler: (() => void) | null) => void;
+  setSelectedTool: (tool: SelectedTool | null) => void;
+  clearSelectedTool: () => void;
+  setAttachedUpload: (upload: UploadResult | null) => void;
+  clearAttachedUpload: () => void;
   getActiveConversation: () => Conversation | undefined;
   loadFromStorage: () => void;
   saveToStorage: () => void;
@@ -26,6 +41,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeId: null,
   isStreaming: false,
+  draftInput: '',
+  abortCurrent: null,
+  selectedTool: null,
+  attachedUpload: null,
 
   createConversation: () => {
     const id = generateId();
@@ -91,6 +110,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setStreaming: (v) => set({ isStreaming: v }),
+  setDraftInput: (value) => set({ draftInput: value }),
+  setAbortCurrent: (handler) => set({ abortCurrent: handler }),
+  setSelectedTool: (tool) => set({ selectedTool: tool }),
+  clearSelectedTool: () => set({ selectedTool: null }),
+  setAttachedUpload: (upload) => set({ attachedUpload: upload }),
+  clearAttachedUpload: () => set({ attachedUpload: null }),
 
   getActiveConversation: () => {
     const s = get();

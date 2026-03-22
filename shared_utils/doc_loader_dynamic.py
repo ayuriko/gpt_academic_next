@@ -1,5 +1,6 @@
 import re
 import os
+from toolbox import get_conf
 
 
 def start_with_url(inputs:str):
@@ -43,11 +44,19 @@ def load_web_content(inputs:str, chatbot_with_cookie, history:list):
         yield from update_ui(chatbot=chatbot_with_cookie, history=history)
 
 def extract_file_path(text):
-    # 匹配以 private_upload 开头，包含时间戳格式的路径
-    pattern = r'(private_upload/[^\s]+?/\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})'
-    match = re.search(pattern, text)
-    if match and os.path.exists(match.group(1)):
-        return match.group(1)
+    raw_base_path = get_conf("PATH_PRIVATE_UPLOAD").replace("\\", "/").rstrip("/")
+    absolute_base_path = os.path.abspath(get_conf("PATH_PRIVATE_UPLOAD")).replace("\\", "/").rstrip("/")
+    normalized_text = text.replace("\\", "/")
+
+    for base_path in [absolute_base_path, raw_base_path]:
+        if not base_path:
+            continue
+        for match in re.finditer(re.escape(base_path), normalized_text):
+            start = match.start()
+            for end in range(len(normalized_text), start + len(base_path) - 1, -1):
+                candidate = normalized_text[start:end].strip(" \t\r\n`'\"，。！？,.;:()[]{}<>")
+                if candidate and os.path.exists(candidate):
+                    return candidate
     return None
 
 def contain_uploaded_files(inputs: str):
@@ -62,7 +71,13 @@ def load_uploaded_files(inputs, method, llm_kwargs, plugin_kwargs, chatbot_with_
     from crazy_functions.doc_fns.text_content_loader import TextContentLoader
     file_path = extract_file_path(inputs)
     loader = TextContentLoader(chatbot_with_cookie, history)
-    yield from loader.execute(file_path)
+    if os.path.isfile(file_path):
+        yield from loader.execute_single_file(file_path)
+    else:
+        yield from loader.execute(file_path)
+
+    if not loader.latest_llm_content:
+        return None
 
     # get question
     original_question = inputs.replace(file_path, '').strip()

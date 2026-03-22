@@ -43,6 +43,7 @@ class TextContentLoader:
         """初始化加载器"""
         self.chatbot = chatbot
         self.history = history
+        self.latest_llm_content: str = ""
         self.failed_files: List[Tuple[str, str]] = []
         self.processed_size: int = 0
         self.start_time: float = 0
@@ -130,6 +131,9 @@ class TextContentLoader:
         try:
             content = extract_text(file_info.path)
             if not content or not content.strip():
+                logger.warning(f"文件内容提取为空: {file_info.path}")
+                with self._lock:
+                    self.failed_files.append((file_info.rel_path, "所有提取方式均未能获取到文本内容（可能是扫描件/图片型PDF）"))
                 return None
             return content
         except Exception as e:
@@ -172,9 +176,17 @@ class TextContentLoader:
         # 处理单个文件的情况
         if os.path.isfile(path):
             if self._is_valid_file(path):
-                file_info = self._create_file_info(os.DirEntry(os.path.dirname(path)), os.path.dirname(path))
-                if file_info:
-                    return [file_info]
+                try:
+                    stats = os.stat(path)
+                    return [FileInfo(
+                        path=path,
+                        rel_path=os.path.basename(path),
+                        size=stats.st_size / (1024 * 1024),
+                        extension=os.path.splitext(path)[1].lower(),
+                        last_modified=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stats.st_mtime))
+                    )]
+                except OSError:
+                    return []
             return []
 
         # 处理目录的情况
@@ -294,6 +306,7 @@ class TextContentLoader:
             Generator: UI更新生成器
         """
         try:
+            self.latest_llm_content = ""
             # 首先显示正在处理的提示信息
             self.chatbot.append(["提示", "正在提取文本内容，请稍作等待..."])
             yield from update_ui(chatbot=self.chatbot, history=self.history)
@@ -327,16 +340,28 @@ class TextContentLoader:
                         successful_files.append(file_info)
                         successful_contents.append(content)
 
-            # 显示文件内容，替换之前的提示信息
+            # 显示简要提示，不在前端展示全文
             if content_blocks:
                 # 移除之前的提示信息
                 self.chatbot.pop()
-                self.chatbot.append(["文件内容", "\n".join(content_blocks)])
+                file_summary = "、".join(f.rel_path for f in successful_files)
+                self.chatbot.append(["提示", f"已成功读取 {len(successful_files)} 个文件：{file_summary}\n请提问。"])
+                self.latest_llm_content = self._format_content_for_llm(successful_files, successful_contents)
                 self.history.extend([
-                    self._format_content_for_llm(successful_files, successful_contents),
+                    self.latest_llm_content,
                     "我已经接收到你上传的文件的内容，请提问"
                 ])
                 yield from update_ui(chatbot=self.chatbot, history=self.history)
+            else:
+                self.chatbot.pop()
+                fail_detail = ""
+                if self.failed_files:
+                    fail_detail = "\n\n失败详情:\n" + "\n".join(
+                        f"- {name}: {reason}" for name, reason in self.failed_files
+                    )
+                self.chatbot.append(["提示", f"未能从上传文件中提取可读文本内容{fail_detail}"])
+                yield from update_ui(chatbot=self.chatbot, history=self.history)
+                return
 
             yield from update_ui(chatbot=self.chatbot, history=self.history)
 
@@ -361,6 +386,7 @@ class TextContentLoader:
             Generator: UI更新生成器
         """
         try:
+            self.latest_llm_content = ""
             # 首先显示正在处理的提示信息
             self.chatbot.append(["提示", "正在提取文本内容，请稍作等待..."])
             yield from update_ui(chatbot=self.chatbot, history=self.history)
@@ -423,15 +449,14 @@ class TextContentLoader:
                 yield from update_ui(chatbot=self.chatbot, history=self.history)
                 return
 
-            # 格式化内容并更新UI
-            formatted_content = self._format_content_with_fold(file_info, content)
-
+            # 简要提示，不在前端展示全文
             # 移除之前的提示信息
             self.chatbot.pop()
-            self.chatbot.append(["文件内容", formatted_content])
+            self.chatbot.append(["提示", f"已成功读取文件：{file_info.rel_path}\n请提问。"])
 
             # 更新历史记录，便于LLM处理
             llm_content = self._format_content_for_llm([file_info], [content])
+            self.latest_llm_content = llm_content
             self.history.extend([llm_content, "我已经接收到你上传的文件的内容，请提问"])
 
             yield from update_ui(chatbot=self.chatbot, history=self.history)

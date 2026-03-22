@@ -161,8 +161,8 @@ MAX_RETRY = 2
 DEFAULT_FN_GROUPS = ['对话', '编程', '学术', '智能体']
 
 
-# 定义界面上“询问多个GPT模型”插件应该使用哪些模型，请从AVAIL_LLM_MODELS中选择，并在不同模型之间用`&`间隔，例如"gpt-3.5-turbo&chatglm3&azure-gpt-4"
-MULTI_QUERY_LLM_MODELS = "gpt-3.5-turbo&chatglm3"
+# 定义界面上“询问多个GPT模型”插件应该使用哪些模型，请从AVAIL_LLM_MODELS中选择，并在不同模型之间用`&`间隔，例如"gpt-5.4&deepseek-reasoner&gpt-4o"
+MULTI_QUERY_LLM_MODELS = "gpt-5.4&deepseek-reasoner"
 
 
 # 选择本地模型变体（只有当AVAIL_LLM_MODELS包含了对应本地模型时，才会起作用）

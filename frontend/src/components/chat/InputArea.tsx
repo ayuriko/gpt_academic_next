@@ -1,29 +1,52 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
-import { Input, Button, Tooltip, Popover, Dropdown, theme } from 'antd';
-import { PlusOutlined, StopOutlined, AudioOutlined } from '@ant-design/icons';
+import React, { useEffect, useRef, useState } from 'react';
+import { Input, Button, Tooltip, Popover, Dropdown, theme, message } from 'antd';
+import { PlusOutlined, StopOutlined, AudioOutlined, ControlOutlined, CloseOutlined, ThunderboltOutlined, FilePdfOutlined, FileTextOutlined, FileImageOutlined, FileOutlined, PaperClipOutlined } from '@ant-design/icons';
 import { useChatStore } from '@/stores/chatStore';
 import { useSettingsStore } from '@/stores/settingsStore';
-import { streamChat, parseSSEStream } from '@/lib/api';
-import FileUpload from '@/components/upload/FileUpload';
+import { streamChat, parseSSEStream, uploadFiles } from '@/lib/api';
+import ToolPicker from '@/components/plugins/ToolPicker';
 
 const { TextArea } = Input;
 
 export default function InputArea() {
-  const [input, setInput] = useState('');
   const { token } = theme.useToken();
+  const [toolPickerOpen, setToolPickerOpen] = useState(false);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [isDragActive, setIsDragActive] = useState(false);
   const {
-    activeId, isStreaming, appendBotChunk,
-    setStreaming, createConversation, saveToStorage,
+    activeId, isStreaming, draftInput, abortCurrent, selectedTool, attachedUpload, appendBotChunk,
+    setStreaming, createConversation, saveToStorage, setDraftInput, setAbortCurrent, setSelectedTool, clearSelectedTool, setAttachedUpload, clearAttachedUpload,
   } = useChatStore();
   const { llmModel, topP, temperature, maxLength, systemPrompt } = useSettingsStore();
-  const abortRef = useRef<(() => void) | null>(null);
+  const conv = useChatStore((state) => state.getActiveConversation());
   const sendLockRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
+  const isEmptyConversation = !conv || conv.chatbot.length === 0;
+
+  const attachedFileName = attachedUpload?.paths?.[0]?.split('/').pop() || '';
+  const attachedFileCount = attachedUpload?.paths?.length || 0;
+  const attachedFileExt = attachedFileName.includes('.') ? attachedFileName.split('.').pop()?.toUpperCase() || '文件' : '文件';
+
+  const attachmentTitle = attachedUpload
+    ? attachedFileCount > 1
+      ? `${attachedFileName} 等 ${attachedFileCount} 个文件`
+      : attachedFileName
+    : '';
+
+  const attachmentIcon = (() => {
+    const ext = attachedFileExt.toLowerCase();
+    if (ext === 'pdf') return <FilePdfOutlined style={{ color: '#fff', fontSize: 24 }} />;
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return <FileImageOutlined style={{ color: '#fff', fontSize: 24 }} />;
+    if (['md', 'txt', 'doc', 'docx'].includes(ext)) return <FileTextOutlined style={{ color: '#fff', fontSize: 24 }} />;
+    return <FileOutlined style={{ color: '#fff', fontSize: 24 }} />;
+  })();
 
   const handleSend = async () => {
-    const msg = input.trim();
-    if (!msg || isStreaming || sendLockRef.current) return;
+    const msg = draftInput.trim();
+    if ((!msg && !selectedTool && !attachedUpload) || isStreaming || sendLockRef.current) return;
     sendLockRef.current = true;
 
     let convId = activeId;
@@ -38,11 +61,11 @@ export default function InputArea() {
     if (prevChatbot.length === 0) {
       useChatStore.setState((s) => ({
         conversations: s.conversations.map((c) =>
-          c.id === convId ? { ...c, title: msg.slice(0, 30) } : c
+          c.id === convId ? { ...c, title: (msg || selectedTool?.name || '新对话').slice(0, 30) } : c
         ),
       }));
     }
-    setInput('');
+    setDraftInput('');
     setStreaming(true);
 
     try {
@@ -54,42 +77,134 @@ export default function InputArea() {
         top_p: topP,
         temperature,
         max_length: maxLength,
+        plugin_name: selectedTool?.name,
+        plugin_kwargs: selectedTool?.args,
+        session_id: convId,
+        attached_upload_path: attachedUpload?.input_path || null,
       });
-      abortRef.current = abort;
+      setAbortCurrent(abort);
 
       const res = await response;
       if (!res.ok) {
         appendBotChunk(
-          [...prevChatbot, [msg, `错误: ${res.status} ${res.statusText}`]],
+          [...prevChatbot, [msg || selectedTool?.name || null, `错误: ${res.status} ${res.statusText}`]],
           history
         );
         setStreaming(false);
         return;
       }
 
+      // 用 requestAnimationFrame 节流 SSE 更新，避免每个 chunk 都触发重渲染
+      let pendingEvent: { chatbot: [string | null, string | null][]; history: string[] } | null = null;
+      let rafId: number | null = null;
+
+      const flushUpdate = () => {
+        if (pendingEvent) {
+          appendBotChunk(pendingEvent.chatbot, pendingEvent.history);
+          pendingEvent = null;
+        }
+        rafId = null;
+      };
+
       for await (const event of parseSSEStream(res)) {
-        appendBotChunk(event.chatbot, event.history);
+        pendingEvent = event;
+        if (rafId === null) {
+          rafId = requestAnimationFrame(flushUpdate);
+        }
       }
+
+      // 确保最后一次更新不丢失
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      if (pendingEvent) appendBotChunk(pendingEvent.chatbot, pendingEvent.history);
     } catch (err: unknown) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
         const currentConv = useChatStore.getState().getActiveConversation();
         const errorMessage = err instanceof Error ? err.message : '未知错误';
         appendBotChunk(
-          [...(currentConv?.chatbot || []).slice(0, -1), [msg, `错误: ${errorMessage}`]],
+          [...(currentConv?.chatbot || []).slice(0, -1), [msg || selectedTool?.name || null, `错误: ${errorMessage}`]],
           history
         );
       }
     } finally {
       setStreaming(false);
-      abortRef.current = null;
+      setAbortCurrent(null);
       sendLockRef.current = false;
       saveToStorage();
     }
   };
 
   const handleStop = () => {
-    abortRef.current?.();
+    abortCurrent?.();
     setStreaming(false);
+  };
+
+  const handleAttachmentFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+
+    try {
+      const sessionId = activeId || createConversation();
+      const result = await uploadFiles(files, sessionId);
+      setAttachedUpload(result);
+      message.success(`已添加 ${files.length} 个文件`);
+    } catch {
+      message.error('上传失败');
+    }
+  };
+
+  useEffect(() => {
+    const shouldHandleFileDrag = (event: DragEvent) =>
+      Array.from(event.dataTransfer?.types || []).includes('Files');
+
+    const preventBrowserOpenFile = (event: DragEvent) => {
+      if (!shouldHandleFileDrag(event)) return;
+      event.preventDefault();
+    };
+
+    window.addEventListener('dragover', preventBrowserOpenFile);
+    window.addEventListener('drop', preventBrowserOpenFile);
+
+    return () => {
+      window.removeEventListener('dragover', preventBrowserOpenFile);
+      window.removeEventListener('drop', preventBrowserOpenFile);
+    };
+  }, []);
+
+  const handleFileInputChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    await handleAttachmentFiles(files);
+  };
+
+  const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragActive(true);
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setIsDragActive(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDragActive(false);
+    }
+  };
+
+  const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragActive(false);
+    const files = Array.from(event.dataTransfer.files || []);
+    await handleAttachmentFiles(files);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -100,85 +215,290 @@ export default function InputArea() {
   };
 
   return (
-    <div style={{ padding: '12px 24px 20px', background: token.colorBgLayout }}>
+    <div style={{ padding: isEmptyConversation ? '0 24px 34px' : '12px 24px 20px', background: token.colorBgLayout }}>
       <div
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         style={{
-          maxWidth: 800,
+          position: 'relative',
+          maxWidth: isEmptyConversation ? 1220 : 860,
           margin: '0 auto',
-          border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: 20,
+          border: `1px solid ${isDragActive ? token.colorPrimary : token.colorBorder}`,
+          borderRadius: isEmptyConversation ? 36 : 30,
           background: token.colorBgContainer,
           overflow: 'hidden',
+          boxShadow: isEmptyConversation ? '0 20px 52px rgba(15, 23, 42, 0.08)' : '0 12px 32px rgba(30, 41, 59, 0.08)',
+          transition: 'border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease',
+          transform: isDragActive ? 'translateY(-2px)' : 'translateY(0)',
         }}
       >
-        {/* Top: text input area */}
+        {isDragActive && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 3,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(255, 255, 255, 0.78)',
+              backdropFilter: 'blur(6px)',
+              pointerEvents: 'none',
+            }}
+          >
+            <div
+              style={{
+                padding: '18px 26px',
+                borderRadius: 22,
+                border: `1px dashed ${token.colorPrimary}`,
+                background: token.colorBgContainer,
+                boxShadow: '0 18px 45px rgba(47, 107, 255, 0.12)',
+                textAlign: 'center',
+              }}
+            >
+              <div style={{ fontSize: 17, fontWeight: 600, color: token.colorText }}>
+                松开以上传到输入框
+              </div>
+              <div style={{ marginTop: 6, fontSize: 13, color: token.colorTextSecondary }}>
+                文件会作为当前对话附件添加，不会在浏览器里打开
+              </div>
+            </div>
+          </div>
+        )}
+
+        {attachedUpload && (
+          <div
+            style={{
+              padding: '10px 14px 0',
+              background: token.colorBgContainer,
+            }}
+          >
+            <div
+              style={{
+                position: 'relative',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 10,
+                maxWidth: 520,
+                padding: '8px 12px',
+                borderRadius: 20,
+                border: `1px solid ${token.colorBorderSecondary}`,
+                background: token.colorBgElevated,
+                boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)',
+              }}
+            >
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  background: 'linear-gradient(180deg, #ff5b57 0%, #ff3b30 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <span style={{ transform: 'scale(0.62)' }}>{attachmentIcon}</span>
+              </div>
+              <div style={{ minWidth: 0, paddingRight: 16 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    lineHeight: 1.25,
+                    fontWeight: 600,
+                    color: token.colorText,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {attachmentTitle}
+                </div>
+                <div style={{ marginTop: 1, fontSize: 11, color: token.colorTextSecondary }}>
+                  {attachedFileCount > 1 ? `${attachedFileCount} 个文件` : attachedFileExt}
+                </div>
+              </div>
+              <Button
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                onClick={clearAttachedUpload}
+                style={{
+                  position: 'absolute',
+                  top: 5,
+                  right: 5,
+                  width: 20,
+                  height: 20,
+                  minWidth: 20,
+                  borderRadius: 999,
+                  color: token.colorTextSecondary,
+                }}
+              />
+            </div>
+          </div>
+        )}
+
         <TextArea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
+          value={draftInput}
+          onChange={(e) => setDraftInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="有问题，尽管问"
-          autoSize={{ minRows: 1, maxRows: 6 }}
+          autoSize={{ minRows: isEmptyConversation ? 3 : 1, maxRows: 6 }}
           variant="borderless"
           style={{
-            padding: '14px 18px 4px',
-            fontSize: 15,
+            padding: isEmptyConversation ? '24px 28px 10px' : '18px 22px 8px',
+            fontSize: isEmptyConversation ? 20 : 18,
             resize: 'none',
           }}
         />
 
-        {/* Bottom: toolbar row */}
+        {selectedTool && (
+          <div style={{ padding: '0 18px 8px' }}>
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '8px 14px',
+                borderRadius: 999,
+                border: `1px solid ${token.colorPrimaryBorder}`,
+                background: token.colorPrimaryBg,
+                color: token.colorPrimary,
+                fontSize: 14,
+                fontWeight: 500,
+              }}
+            >
+              <ThunderboltOutlined />
+              <span>{selectedTool.name}</span>
+              <Button
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                onClick={clearSelectedTool}
+                style={{ width: 20, height: 20, minWidth: 20, color: token.colorPrimary }}
+              />
+            </div>
+          </div>
+        )}
+
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '4px 10px 10px',
+            gap: 12,
+            padding: '6px 14px 12px',
           }}
         >
-          {/* Left side: attach + model indicator */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Popover
-              content={<FileUpload onUploaded={(paths) => setInput((prev) => prev + '\n' + paths.join('\n'))} />}
-              title="上传文件"
-              trigger="click"
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={handleFileInputChange}
+            style={{ display: 'none' }}
+          />
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Dropdown
+              open={attachmentMenuOpen}
+              onOpenChange={setAttachmentMenuOpen}
+              trigger={['click']}
               placement="topLeft"
+              menu={{
+                items: [
+                  {
+                    key: 'upload-file',
+                    icon: <PaperClipOutlined style={{ fontSize: 18 }} />,
+                    label: <span style={{ fontSize: 15, fontWeight: 500 }}>添加照片和文件</span>,
+                  },
+                ],
+                onClick: ({ key }) => {
+                  if (key === 'upload-file') {
+                    fileInputRef.current?.click();
+                  }
+                },
+                style: {
+                  borderRadius: 18,
+                  padding: 6,
+                  minWidth: 220,
+                },
+              }}
+              dropdownRender={(menu) => (
+                <div
+                  style={{
+                    background: token.colorBgContainer,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    borderRadius: 18,
+                    boxShadow: '0 12px 28px rgba(15, 23, 42, 0.12)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {menu}
+                </div>
+              )}
             >
               <Button
                 type="text"
                 icon={<PlusOutlined />}
                 size="small"
-                style={{ borderRadius: 8, width: 32, height: 32 }}
+                style={{
+                  borderRadius: 999,
+                  width: 34,
+                  height: 34,
+                  minWidth: 34,
+                  padding: 0,
+                  background: 'transparent',
+                  color: token.colorTextSecondary,
+                  fontSize: 18,
+                }}
               />
-            </Popover>
+            </Dropdown>
 
-            <Dropdown
-              menu={{
-                items: [
-                  { key: 'normal', label: '常规对话' },
-                  { key: 'search', label: '联网搜索' },
-                  { key: 'multi', label: '多模型对话' },
-                ],
-              }}
-              trigger={['click']}
+            <Popover
+              open={toolPickerOpen}
+              onOpenChange={setToolPickerOpen}
+              content={
+                <ToolPicker
+                  mainInput={draftInput}
+                  onSelectTool={(tool) => {
+                    setSelectedTool(tool);
+                    setToolPickerOpen(false);
+                  }}
+                />
+              }
+              trigger="click"
+              placement="topLeft"
             >
               <Button
-                type="text"
-                size="small"
-                style={{ borderRadius: 12, fontSize: 13, color: token.colorPrimary, fontWeight: 500 }}
+                type="default"
+                size="middle"
+                icon={<ControlOutlined />}
+                style={{
+                  borderRadius: 999,
+                  height: 40,
+                  paddingInline: 16,
+                  borderColor: toolPickerOpen || selectedTool ? token.colorPrimaryBorder : token.colorBorderSecondary,
+                  background: toolPickerOpen || selectedTool ? token.colorPrimaryBg : token.colorFillTertiary,
+                  color: toolPickerOpen || selectedTool ? token.colorPrimary : token.colorText,
+                  fontWeight: 500,
+                }}
               >
-                {llmModel} ↓
+                工具
               </Button>
-            </Dropdown>
+            </Popover>
+
           </div>
 
-          {/* Right side: voice + send/stop */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <Tooltip title="语音输入">
               <Button
                 type="text"
                 icon={<AudioOutlined />}
                 size="small"
-                style={{ borderRadius: 8, width: 32, height: 32 }}
+                style={{ borderRadius: 999, width: 40, height: 40 }}
               />
             </Tooltip>
 
@@ -198,12 +518,12 @@ export default function InputArea() {
                 shape="circle"
                 size="small"
                 onClick={handleSend}
-                disabled={!input.trim()}
+                disabled={!draftInput.trim() && !selectedTool && !attachedUpload}
                 style={{
-                  width: 36,
-                  height: 36,
-                  background: input.trim() ? '#000' : undefined,
-                  borderColor: input.trim() ? '#000' : undefined,
+                  width: 42,
+                  height: 42,
+                  background: draftInput.trim() || selectedTool || attachedUpload ? '#b7b9bf' : undefined,
+                  borderColor: draftInput.trim() || selectedTool || attachedUpload ? '#b7b9bf' : undefined,
                 }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

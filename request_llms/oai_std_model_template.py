@@ -188,6 +188,7 @@ def get_predict_function(
         )
 
         reasoning = model_info[llm_kwargs['llm_model']].get('enable_reasoning', False)
+        thinking_status = "_正在深度思考中..._"
 
         retry = 0
         while True:
@@ -244,13 +245,19 @@ def get_predict_function(
                         if not console_silence:
                             print(f"[response] {result}")
                         break
+                    had_visible_response = bool(result)
                     result += response_text
                     if reasoning:
                         reasoning_buffer += reasoning_content
                     if observe_window is not None:
                         # 观测窗，把已经获取的数据显示出去
                         if len(observe_window) >= 1:
-                            observe_window[0] += response_text
+                            if response_text:
+                                if not had_visible_response and observe_window[0] == thinking_status:
+                                    observe_window[0] = ""
+                                observe_window[0] += response_text
+                            elif reasoning and reasoning_content and not result:
+                                observe_window[0] = thinking_status
                         # 看门狗，如果超过期限没有喂狗，则终止
                         if len(observe_window) >= 2:
                             if (time.time() - observe_window[1]) > watch_dog_patience:
@@ -261,9 +268,6 @@ def get_predict_function(
                     error_msg = chunk_decoded
                     logger.error(error_msg)
                     raise RuntimeError("Json解析不合常规")
-        if reasoning:
-            paragraphs = ''.join([f'<p style="margin: 1.25em 0;">{line}</p>' for line in reasoning_buffer.split('\n')])
-            return f'''<div class="reasoning_process" >{paragraphs}</div>\n\n''' + result
         return result
 
     def predict(
@@ -324,6 +328,7 @@ def get_predict_function(
         )
 
         reasoning = model_info[llm_kwargs['llm_model']].get('enable_reasoning', False)
+        thinking_status = "_正在深度思考中..._"
 
         history.append(inputs)
         history.append("")
@@ -406,8 +411,7 @@ def get_predict_function(
                     if reasoning:
                         gpt_replying_buffer += response_text
                         gpt_reasoning_buffer += reasoning_content
-                        paragraphs = ''.join([f'<p style="margin: 1.25em 0;">{line}</p>' for line in gpt_reasoning_buffer.split('\n')])
-                        history[-1] = f'<div class="reasoning_process">{paragraphs}</div>\n\n---\n\n' + gpt_replying_buffer
+                        history[-1] = gpt_replying_buffer if gpt_replying_buffer else thinking_status
                     else:
                         gpt_replying_buffer += response_text
                         # 如果这里抛出异常，一般是文本过长，详情见get_full_error的输出

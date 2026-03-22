@@ -474,7 +474,7 @@ def get_crazy_functions():
                     "Color": "stop",
                     "AsButton": False,
                     "AdvancedArgs": True,  # 调用时，唤起高级参数输入区（默认False）
-                    "ArgsReminder": "支持任意数量的llm接口，用&符号分隔。例如chatglm&gpt-3.5-turbo&gpt-4",  # 高级参数输入区的显示提示
+                    "ArgsReminder": "支持任意数量的llm接口，用&符号分隔。例如gpt-5.4&deepseek-reasoner&gpt-4o",  # 高级参数输入区的显示提示
                     "Function": HotReload(同时问询_指定模型),
                 },
             }

@@ -2,18 +2,16 @@
 
 import React, { useState } from 'react';
 import { Select, Button, Space, Tooltip, theme } from 'antd';
-import { SunOutlined, MoonOutlined, MenuFoldOutlined, MenuUnfoldOutlined, SettingOutlined, AppstoreOutlined } from '@ant-design/icons';
+import { SunOutlined, MoonOutlined, MenuFoldOutlined, MenuUnfoldOutlined, SettingOutlined } from '@ant-design/icons';
 import { useSettingsStore } from '@/stores/settingsStore';
 import SettingsDrawer from '@/components/settings/SettingsDrawer';
 
 export default function Header({
   sidebarCollapsed,
   onToggleSidebar,
-  onOpenPlugins,
 }: {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
-  onOpenPlugins: () => void;
 }) {
   const { llmModel, setModel, availModels, darkMode, toggleDarkMode } = useSettingsStore();
   const { token } = theme.useToken();
@@ -50,9 +48,6 @@ export default function Header({
         </Space>
 
         <Space>
-          <Tooltip title="函数插件">
-            <Button type="text" icon={<AppstoreOutlined />} onClick={onOpenPlugins} />
-          </Tooltip>
           <Tooltip title={darkMode ? '切换亮色模式' : '切换暗色模式'}>
             <Button
               type="text"

@@ -21,7 +21,7 @@ export default function PluginPanel({
   open: boolean;
   onClose: () => void;
   mainInput: string;
-  onExecutePlugin: (pluginName: string, args?: { main_input: string; advanced_arg: string }) => void;
+  onExecutePlugin: (pluginName: string, args?: Record<string, string>) => void;
 }) {
   const { plugins, activeGroups, setPlugins } = usePluginStore();
   const [search, setSearch] = useState('');
@@ -32,7 +32,7 @@ export default function PluginPanel({
     if (open && Object.keys(plugins).length === 0) {
       fetchPlugins().then(setPlugins).catch(() => {});
     }
-  }, [open]);
+  }, [open, plugins, setPlugins]);
 
   const filtered = Object.entries(plugins).filter(([name, p]) => {
     const groupMatch = p.group.split('|').some((g) => activeGroups.includes(g));

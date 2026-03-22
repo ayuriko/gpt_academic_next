@@ -8,6 +8,7 @@
     具备多线程调用能力的函数：在函数插件中被调用，灵活而简洁
     2. predict_no_ui_long_connection(...)
 """
+import os
 import tiktoken, copy, re
 from loguru import logger
 from functools import lru_cache
@@ -47,6 +48,11 @@ from .bridge_cohere import predict_no_ui_long_connection as cohere_noui
 from .oai_std_model_template import get_predict_function
 
 colors = ['#FF00FF', '#00FFFF', '#FF0000', '#990099', '#009999', '#990044']
+
+
+def _format_multi_model_markdown(model_name: str, content: str):
+    cleaned = (content or "").strip()
+    return f"### `{model_name}`\n\n{cleaned}"
 
 class LazyloadTiktoken(object):
     def __init__(self, model):
@@ -1582,9 +1588,8 @@ def predict_no_ui_long_connection(inputs:str, llm_kwargs:dict, history:list, sys
                 # 观察窗（window）
                 chat_string = []
                 for i in range(n_model):
-                    color = colors[i%len(colors)]
-                    chat_string.append( f"【{str(models[i])} 说】: <font color=\"{color}\"> {window_mutex[i][0]} </font>" )
-                res = '<br/><br/>\n\n---\n\n'.join(chat_string)
+                    chat_string.append(_format_multi_model_markdown(str(models[i]), window_mutex[i][0]))
+                res = '\n\n---\n\n'.join(chat_string)
                 # # # # # # # # # # #
                 observe_window[0] = res
 
@@ -1600,11 +1605,10 @@ def predict_no_ui_long_connection(inputs:str, llm_kwargs:dict, history:list, sys
             time.sleep(1)
 
         for i, future in enumerate(futures):  # wait and get
-            color = colors[i%len(colors)]
-            return_string_collect.append( f"【{str(models[i])} 说】: <font color=\"{color}\"> {future.result()} </font>" )
+            return_string_collect.append(_format_multi_model_markdown(str(models[i]), future.result()))
 
         window_mutex[-1] = False # stop mutex thread
-        res = '<br/><br/>\n\n---\n\n'.join(return_string_collect)
+        res = '\n\n---\n\n'.join(return_string_collect)
         return res
 
 # 根据基础功能区 ModelOverride 参数调整模型类型，用于 `predict` 中
@@ -1650,7 +1654,7 @@ def predict(inputs:str, llm_kwargs:dict, plugin_kwargs:dict, chatbot,
 
     if llm_kwargs['llm_model'] not in model_info:
         from toolbox import update_ui
-        chatbot.append([inputs, f"很抱歉，模型 '{llm_kwargs['llm_model']}' 暂不支持<br/>(1) 检查config中的AVAIL_LLM_MODELS选项<br/>(2) 检查request_llms/bridge_all.py中的模型路由"])
+        chatbot.append([inputs, f"很抱歉，模型 `{llm_kwargs['llm_model']}` 暂不支持。\n\n1. 检查 config 中的 `AVAIL_LLM_MODELS` 选项\n2. 检查 `request_llms/bridge_all.py` 中的模型路由"])
         yield from update_ui(chatbot=chatbot, history=history) # 刷新界面
 
     method = model_info[llm_kwargs['llm_model']]["fn_with_ui"]  # 如果这里报错，检查config中的AVAIL_LLM_MODELS选项
@@ -1662,8 +1666,16 @@ def predict(inputs:str, llm_kwargs:dict, plugin_kwargs:dict, chatbot,
         yield from load_web_content(inputs, chatbot, history)
         return
 
-    if contain_uploaded_files(inputs):
+    attached_upload_path = llm_kwargs.get("attached_upload_path")
+    if attached_upload_path and os.path.exists(attached_upload_path):
+        synthetic_inputs = f"{attached_upload_path}\n{inputs}".strip() if inputs else attached_upload_path
+        inputs = yield from load_uploaded_files(synthetic_inputs, method, llm_kwargs, plugin_kwargs, chatbot, history, system_prompt, stream, additional_fn)
+        if not inputs:
+            return
+    elif contain_uploaded_files(inputs):
         inputs = yield from load_uploaded_files(inputs, method, llm_kwargs, plugin_kwargs, chatbot, history, system_prompt, stream, additional_fn)
+        if not inputs:
+            return
 
     # 更新一下llm_kwargs的参数，否则会出现参数不匹配的问题
     yield from method(inputs, llm_kwargs, plugin_kwargs, chatbot, history, system_prompt, stream, additional_fn)

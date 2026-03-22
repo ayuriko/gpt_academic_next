@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Modal, Form, Input, Select, Typography } from 'antd';
+import React from 'react';
+import { Modal, Form, Input, Typography } from 'antd';
 import { PluginInfo } from '@/lib/types';
 
 const { TextArea } = Input;
@@ -19,7 +19,7 @@ export default function PluginArgModal({
   pluginName: string;
   plugin: PluginInfo;
   mainInput: string;
-  onOk: (args: { main_input: string; advanced_arg: string }) => void;
+  onOk: (args: Record<string, string>) => void;
   onCancel: () => void;
 }) {
   const [form] = Form.useForm();

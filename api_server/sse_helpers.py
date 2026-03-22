@@ -1,12 +1,15 @@
 import json
 from starlette.responses import StreamingResponse
+from api_server.session import session_manager
 
 
-def sse_generator(predict_generator):
+def sse_generator(predict_generator, session_id: str | None = None):
     """Wrap a predict() generator yielding (cookies, chatbot, history, msg) into SSE events."""
     def event_stream():
         try:
             for cookies, chatbot, history, msg in predict_generator:
+                if session_id and isinstance(cookies, dict):
+                    session_manager.update_session(session_id, cookies)
                 # chatbot is a list of [user, bot] pairs
                 # history is a JSON string of the history list
                 chatbot_data = []

@@ -6,17 +6,21 @@ class SessionManager:
     def __init__(self):
         self._sessions: dict[str, dict] = {}
 
-    def create_session(self) -> tuple[str, dict]:
-        sid = uuid.uuid4().hex
-        API_KEY, LLM_MODEL = get_conf("API_KEY", "LLM_MODEL")
-        data = {
+    def _build_default_session(self) -> dict:
+        API_KEY, LLM_MODEL, EMBEDDING_MODEL = get_conf("API_KEY", "LLM_MODEL", "EMBEDDING_MODEL")
+        return {
             "api_key": API_KEY,
             "llm_model": LLM_MODEL,
+            "embed_model": EMBEDDING_MODEL,
             "top_p": 1.0,
             "temperature": 1.0,
             "max_length": None,
             "uuid": uuid.uuid4(),
         }
+
+    def create_session(self, sid: str | None = None) -> tuple[str, dict]:
+        sid = sid or uuid.uuid4().hex
+        data = self._build_default_session()
         self._sessions[sid] = data
         return sid, data
 
@@ -30,7 +34,7 @@ class SessionManager:
     def get_or_create(self, sid: str | None) -> tuple[str, dict]:
         if sid and sid in self._sessions:
             return sid, self._sessions[sid]
-        return self.create_session()
+        return self.create_session(sid)
 
 
 session_manager = SessionManager()
