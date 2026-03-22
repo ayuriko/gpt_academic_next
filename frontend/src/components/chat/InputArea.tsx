@@ -98,9 +98,18 @@ export default function InputArea() {
       let pendingEvent: { chatbot: [string | null, string | null][]; history: string[] } | null = null;
       let rafId: number | null = null;
 
+      // 后端每次请求创建新 chatbot，只含当前轮消息，需要拼接历史
+      const mergeWithPrev = (serverChatbot: [string | null, string | null][], serverHistory: string[]) => {
+        return {
+          chatbot: [...prevChatbot, ...serverChatbot],
+          history: serverHistory,
+        };
+      };
+
       const flushUpdate = () => {
         if (pendingEvent) {
-          appendBotChunk(pendingEvent.chatbot, pendingEvent.history);
+          const merged = mergeWithPrev(pendingEvent.chatbot, pendingEvent.history);
+          appendBotChunk(merged.chatbot, merged.history);
           pendingEvent = null;
         }
         rafId = null;
@@ -115,7 +124,10 @@ export default function InputArea() {
 
       // 确保最后一次更新不丢失
       if (rafId !== null) cancelAnimationFrame(rafId);
-      if (pendingEvent) appendBotChunk(pendingEvent.chatbot, pendingEvent.history);
+      if (pendingEvent) {
+        const merged = mergeWithPrev(pendingEvent.chatbot, pendingEvent.history);
+        appendBotChunk(merged.chatbot, merged.history);
+      }
     } catch (err: unknown) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
         const currentConv = useChatStore.getState().getActiveConversation();
